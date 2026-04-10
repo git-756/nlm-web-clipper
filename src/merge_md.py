@@ -19,7 +19,8 @@ def main():
         "Onshape_PartStudio": [],
         "Onshape_Assembly": [],
         "Onshape_Drawing_and_View": [],
-        "Onshape_System_and_Others": []
+        "Onshape_System_and_Others": [],
+        "Onshape_Tech_Tips": []
     }
 
     # outputフォルダ内のすべてのMarkdownファイルを取得
@@ -56,6 +57,8 @@ def main():
             merged_contents["Onshape_Assembly"].append(content)
         elif "/Drawing/" in url or "/View/" in url:
             merged_contents["Onshape_Drawing_and_View"].append(content)
+        elif "tech-tips" in url:  # ★これを追加！
+            merged_contents["Onshape_Tech_Tips"].append(content)
         else:
             merged_contents["Onshape_System_and_Others"].append(content)
 
