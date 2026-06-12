@@ -12,6 +12,7 @@ wheels/
 # 出力ファイル
 output/
 merged_output/
+*.pdf
 
 # テキストファイル
 *.txt

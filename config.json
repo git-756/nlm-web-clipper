@@ -1,0 +1,12 @@
+{
+  "_comment": "pdf_merge_{date}.pdf",
+  "output_pattern": "electrical_math_方程式と関数.pdf",
+  "url_list_file": "urls.txt",
+  "pdf_options": {
+    "margin_top": "10mm",
+    "margin_bottom": "10mm",
+    "margin_left": "10mm",
+    "margin_right": "10mm",
+    "print_background": true
+  }
+}
