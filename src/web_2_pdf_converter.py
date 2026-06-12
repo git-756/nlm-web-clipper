@@ -1,7 +1,8 @@
 """
-Universal Web & PDF Merger
-外部設定ファイル (config.json) と URLリストファイル (urls.txt) を読み込み、
-指定された順序で取得・PDF化して1つのPDFファイルに結合する汎用スクリプト。
+Web to Clean PDF Converter & Merger
+共通設定ファイル (config.json) と URLリストファイル (urls.txt) を読み込み、
+指定された順序でHTMLから不要なヘッダー・サイドバー・フッターなどをDOMから「物理的に削除」した上で
+A4サイズの美しいPDFを生成し、最後に1つに結合するスクリプト。
 
 License: MIT License
 """
@@ -15,26 +16,22 @@ from urllib.parse import urlparse
 import requests
 from pypdf import PdfWriter
 
-# Webページの高精度PDF化のためにPlaywrightを使用
 try:
     from playwright.sync_api import sync_playwright
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
-# 403 Forbiddenなどを回避するためのUser-Agent
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 
 def is_pdf_url(url):
-    """URLが直接PDFを指しているか簡易判定する"""
+    """URLが直接PDFを指しているか判定"""
     parsed = urlparse(url)
     if parsed.path.lower().endswith('.pdf'):
         return True
-    
-    # 拡張子で判定できない場合は、ヘッドリクエストを送ってContent-Typeを確認
     try:
         response = requests.head(url, headers=HEADERS, timeout=5, allow_redirects=True)
         content_type = response.headers.get('Content-Type', '').lower()
@@ -46,7 +43,7 @@ def is_pdf_url(url):
 
 
 def download_pdf(url, save_path):
-    """直接PDFのURLからダウンロードする"""
+    """直接PDFファイルをダウンロード"""
     try:
         response = requests.get(url, headers=HEADERS, stream=True, timeout=15)
         response.raise_for_status()
@@ -59,11 +56,49 @@ def download_pdf(url, save_path):
         return False
 
 
-def convert_html_to_pdf(url, save_path, pdf_options):
-    """Playwrightを使用してWebページ(HTML)をレンダリングし、PDFとして保存する"""
+def clean_web_page_dom(page):
+    """不要な要素をDOMから物理的に削除し、メインレイアウトをA4全幅に引き伸ばす"""
+    page.evaluate("""() => {
+        const noiseSelectors = [
+            'header', 'footer', 'aside', 'nav', 'form', 'iframe', 'audio', 'object', 'embed',
+            '#header', '#footer', '#global-header', '#menu', '#sidebar', '.sidebar',
+            '#submenu', '#sub', '.sub', '.print-btn', '.survey-area', '.anket',
+            '#topic-path', '.topic-path', '#topicpath', '.breadcrumb',
+            '#player-container', '.audio-player', '.back-to-top', '.utility-nav',
+            '#search', '.search', '.sitemap', '.contact', '.association', '.guide-member',
+            '.anket-area', '#right-box', '.right-box', '#left-box', '.left-box',
+            'script', 'noscript', 'style'
+        ];
+        
+        noiseSelectors.forEach(selector => {
+            document.querySelectorAll(selector).forEach(el => {
+                try { el.remove(); } catch(e) {}
+            });
+        });
+        
+        // テーブルレイアウトおよびコンテナの全幅化調整
+        const mainSelectors = [
+            '#main-content', '.main-content', 'main', '#contents', '.contents', '#container', '.container', 'body'
+        ];
+        
+        for (const sel of mainSelectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                el.style.margin = '0 auto';
+                el.style.padding = '15px';
+                el.style.width = '100%';
+                el.style.maxWidth = '100%';
+                el.style.backgroundColor = '#ffffff';
+                break;
+            }
+        }
+    }""")
+
+
+def convert_html_to_clean_pdf(url, save_path, pdf_options):
+    """Playwrightでアクセスし、ノイズ除去後にA4 PDFへ書き出す"""
     if not PLAYWRIGHT_AVAILABLE:
-        print("\n  [警告] Playwrightがインストールされていないため、HTMLのPDF化をスキップします。")
-        print("  インストール方法: pip install playwright && playwright install chromium")
+        print("\n  [警告] Playwrightがインストールされていません。")
         return False
 
     try:
@@ -74,16 +109,21 @@ def convert_html_to_pdf(url, save_path, pdf_options):
                 user_agent=HEADERS["User-Agent"]
             )
             page = context.new_page()
-            
-            # ページ遷移し、すべてのリソースが読み込まれるまで待機
             page.goto(url, wait_until="networkidle", timeout=30000)
             
-            # 設定ファイルからマージンなどのオプションを読み込む
+            # 通常画面表示(screen)をシミュレート
+            page.emulate_media(media="screen")
+            # 遅延要素（数式レンダリングなど）のために少し待機
+            page.wait_for_timeout(2000)
+            
+            # 物理削除処理
+            clean_web_page_dom(page)
+            
             margin = {
                 "top": pdf_options.get("margin_top", "10mm"),
                 "bottom": pdf_options.get("margin_bottom", "10mm"),
-                "left": pdf_options.get("margin_left", "10mm"),
-                "right": pdf_options.get("margin_right", "10mm")
+                "left": pdf_options.get("margin_left", "15mm"),
+                "right": pdf_options.get("margin_right", "15mm")
             }
             
             page.pdf(
@@ -95,89 +135,68 @@ def convert_html_to_pdf(url, save_path, pdf_options):
             browser.close()
         return True
     except Exception as e:
-        print(f"\n  [エラー] WebページのPDF化に失敗しました: {e}")
+        print(f"\n  [エラー] クリーンPDF変換失敗: {url} -> {e}")
         return False
 
 
 def read_urls_from_file(filepath):
-    """外部テキストファイルからURLリストを読み込む"""
     if not os.path.exists(filepath):
         return []
     urls = []
     with open(filepath, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
-            # 空行やコメント行(#)を除外
             if line and not line.startswith('#'):
                 urls.append(line)
     return urls
 
 
 def load_config():
-    """config.jsonから設定をロードする。存在しない場合はデフォルト値を返す"""
     config_path = "config.json"
-    default_config = {
-        "output_pattern": "pdf_merge_{date}.pdf",
-        "url_list_file": "urls.txt",
-        "pdf_options": {
-            "margin_top": "10mm",
-            "margin_bottom": "10mm",
-            "margin_left": "10mm",
-            "margin_right": "10mm",
-            "print_background": True
-        }
-    }
-    
     if os.path.exists(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
-                # デフォルト値をベースに、ユーザー設定で上書き
-                default_config.update(user_config)
-                print(f"[*] 設定ファイル '{config_path}' を読み込みました。")
+                return json.load(f)
         except Exception as e:
-            print(f"[警告] 設定ファイルの読み込みに失敗しました。デフォルト設定を使用します: {e}")
-    else:
-        # 存在しない場合は、雛形を作成しておく
-        try:
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(default_config, f, indent=2, ensure_ascii=False)
-            print(f"[*] 設定ファイル '{config_path}' が見つからなかったため、新しく作成しました。")
-        except Exception:
-            pass
-            
-    return default_config
+            print(f"[警告] 設定ファイル読み込みエラー: {e}")
+    
+    # フォールバック
+    return {
+        "url_list_file": "urls.txt",
+        "pdf_output_pattern": "electrical_math_optimized_{date}.pdf",
+        "pdf_options": {
+            "margin_top": "10mm",
+            "margin_bottom": "10mm",
+            "margin_left": "15mm",
+            "margin_right": "15mm",
+            "print_background": True
+        }
+    }
 
 
 def main():
-    # 1. 設定の読み込み
     config = load_config()
-    
     url_file = config.get("url_list_file", "urls.txt")
-    output_pattern = config.get("output_pattern", "pdf_merge_{date}.pdf")
+    output_pattern = config.get("pdf_output_pattern", "electrical_math_optimized_{date}.pdf")
     pdf_options = config.get("pdf_options", {})
 
-    # 日付文字列を生成して出力ファイル名を決定
     today_str = datetime.now().strftime("%Y%m%d")
     output_filename = output_pattern.replace("{date}", today_str)
 
-    # 2. URLリストの読み込み
     if not os.path.exists(url_file):
-        print(f"[エラー] URLリストファイル '{url_file}' が見つかりません。")
-        print("ルートディレクトリにファイルを作成し、結合したいURLを1行ずつ記述してください。")
+        print(f"[エラー] URLリストファイル '{url_file}' が存在しません。")
         sys.exit(1)
-        
+
     target_urls = read_urls_from_file(url_file)
-
     if not target_urls:
-        print(f"[エラー] '{url_file}' の中に有効なURLが見つかりません。")
+        print("[エラー] 処理対象のURLが空です。")
         sys.exit(1)
 
     print("==================================================")
-    print(" 汎用 Web & PDF 一括結合ツール (設定外部化版)")
+    print(" 1. クリーンPDF 抽出・一括マージツール")
     print("==================================================")
-    print(f"URLリストファイル: {url_file} (計 {len(target_urls)} 件)")
-    print(f"出力ファイル名   : {output_filename}")
+    print(f"URLリスト: {url_file} (計 {len(target_urls)} 件)")
+    print(f"出力PDF : {output_filename}")
     print("==================================================")
 
     merger = PdfWriter()
@@ -189,13 +208,13 @@ def main():
             filename = f"temp_{idx:03d}.pdf"
             temp_path = os.path.join(temp_dir.name, filename)
             
-            print(f"[{idx}/{len(target_urls)}] 処理中: {url} ... ", end="", flush=True)
+            print(f"[{idx}/{len(target_urls)}] クリーンPDF生成中: {url} ... ", end="", flush=True)
 
             success = False
             if is_pdf_url(url):
                 success = download_pdf(url, temp_path)
             else:
-                success = convert_html_to_pdf(url, temp_path, pdf_options)
+                success = convert_html_to_clean_pdf(url, temp_path, pdf_options)
 
             if success:
                 print("完了")
@@ -204,19 +223,17 @@ def main():
             else:
                 print("スキップ（エラー）")
 
-        # 結合処理
         if temp_files:
-            print(f"\n[*] 全てのPDFを1つのファイルに結合しています...")
+            print(f"\n[*] 全てのクリーンPDFを1つに統合中...")
             merger.write(output_filename)
             print(f"==================================================")
-            print(f"【成功】PDFファイルの作成が完了しました！")
+            print(f"【成功】印刷制限・ノイズをクリアしたPDFが完成しました！")
             print(f"保存先: {os.path.abspath(output_filename)}")
             print(f"==================================================")
         else:
-            print("\n[エラー] 結合可能なPDFが1つも生成されませんでした。")
+            print("\n[エラー] 有効なPDFが1つも生成されませんでした。")
 
     finally:
-        # 一時ファイルのクリーンアップ
         merger.close()
         temp_dir.cleanup()
 
